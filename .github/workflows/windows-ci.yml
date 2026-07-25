@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     name: MSVC Release
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 20
 
     steps:
