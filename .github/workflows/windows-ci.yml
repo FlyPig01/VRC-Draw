@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: MSVC Release
+    name: MinGW Release
     runs-on: windows-2022
     timeout-minutes: 20
 
@@ -23,18 +23,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up MinGW
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
       - name: Configure
-        run: >-
-          cmake -S . -B build
-          -G "Visual Studio 17 2022"
-          -A x64
-          -DBUILD_TESTING=ON
+        shell: msys2 {0}
+        run: cmake --preset mingw-release
 
       - name: Build
-        run: cmake --build build --config Release --parallel 2
+        shell: msys2 {0}
+        run: cmake --build --preset mingw-release --parallel 2
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        shell: msys2 {0}
+        run: ctest --preset mingw-release
 
       - name: Create portable package
         shell: pwsh
@@ -43,7 +53,7 @@ jobs:
           New-Item -ItemType Directory -Path "$package/data/logs" -Force | Out-Null
           New-Item -ItemType Directory -Path "$package/data/temp" -Force | Out-Null
           New-Item -ItemType Directory -Path "$package/exports" -Force | Out-Null
-          Copy-Item "build/portable/VRC-Draw/VRC-Draw.exe" $package
+          Copy-Item "build/mingw-release/portable/VRC-Draw/VRC-Draw.exe" $package
           Copy-Item "README.md" $package
           Copy-Item "LICENSE" $package
           Copy-Item "THIRD_PARTY_NOTICES.md" $package
