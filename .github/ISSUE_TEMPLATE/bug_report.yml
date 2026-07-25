@@ -1,0 +1,77 @@
+name: Bug 报告
+description: 报告可以稳定复现的程序问题
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题。请勿在 Issue 中提交 VRChat 账号、私人世界信息或其他敏感数据。
+
+  - type: input
+    id: version
+    attributes:
+      label: VRC-Draw 版本
+      description: 可填写 Release 版本、构建日期或提交哈希。
+      placeholder: 例如 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: 例如 Windows 11 24H2 x64
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么？预期结果是什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 导入……
+        3. 按下……
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 问题类别
+      options:
+        - 程序无法启动
+        - 图片导入或路径生成
+        - UI 或预览
+        - 鼠标移动或左键状态
+        - 开始/暂停快捷键或进度悬浮窗
+        - 便携存储
+        - 构建或测试
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 补充信息
+      description: 可粘贴不含隐私的错误信息或截图。请不要上传原始私人图片。
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有发现相同问题。
+          required: true
+        - label: 我没有在报告中包含账号、私人世界或其他敏感信息。
+          required: true

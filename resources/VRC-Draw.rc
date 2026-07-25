@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_VRC_DRAW_ICON ICON "VRC-Draw.ico"

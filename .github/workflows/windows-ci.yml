@@ -1,0 +1,58 @@
+name: Windows CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: MSVC Release
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -G "Visual Studio 17 2022"
+          -A x64
+          -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Create portable package
+        shell: pwsh
+        run: |
+          $package = "build/package/VRC-Draw"
+          New-Item -ItemType Directory -Path "$package/data/logs" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$package/data/temp" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$package/exports" -Force | Out-Null
+          Copy-Item "build/portable/VRC-Draw/VRC-Draw.exe" $package
+          Copy-Item "README.md" $package
+          Copy-Item "LICENSE" $package
+          Copy-Item "THIRD_PARTY_NOTICES.md" $package
+          Compress-Archive -Path $package -DestinationPath "build/VRC-Draw-win64.zip"
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRC-Draw-win64
+          path: build/VRC-Draw-win64.zip
+          if-no-files-found: error
+          retention-days: 14

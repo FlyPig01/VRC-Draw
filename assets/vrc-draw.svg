@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">VRC-Draw</title>
+  <desc id="description">蓝色圆角画布上的白色轨迹与画笔</desc>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#4f6ef7"/>
+  <polyline points="42,184 78,148 108,175 126,161" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="42" cy="184" r="9" fill="#8ee7ff"/>
+  <polygon points="137,118 187,49 213,68 163,137" fill="#ffffff"/>
+  <polygon points="137,118 163,137 126,161" fill="#8ee7ff"/>
+  <polygon points="187,49 200,31 226,50 213,68" fill="#dbe5ff"/>
+</svg>
