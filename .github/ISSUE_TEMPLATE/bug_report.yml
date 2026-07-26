@@ -13,7 +13,7 @@ body:
     attributes:
       label: VRC-Draw 版本
       description: 可填写 Release 版本、构建日期或提交哈希。
-      placeholder: 例如 0.1.0
+      placeholder: 例如 0.2.0
     validations:
       required: true
 

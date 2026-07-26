@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <string>
 #include <string_view>
 
@@ -28,6 +30,24 @@ void ParseIntegerSetting(
     }
 }
 
+void ParseFloatSetting(
+    const std::string& line,
+    const std::string_view name,
+    float& destination)
+{
+    const std::string prefix = std::string(name) + '=';
+    if (!line.starts_with(prefix)) {
+        return;
+    }
+    float value = destination;
+    const auto first = line.data() + prefix.size();
+    const auto last = line.data() + line.size();
+    if (const auto result = std::from_chars(first, last, value);
+        result.ec == std::errc{} && result.ptr == last && std::isfinite(value)) {
+        destination = value;
+    }
+}
+
 void ParseModifierSetting(
     const std::string& line,
     const std::string_view name,
@@ -36,6 +56,19 @@ void ParseModifierSetting(
     int value = static_cast<int>(destination);
     ParseIntegerSetting(line, name, value);
     destination = static_cast<std::uint32_t>(std::max(0, value)) & kSupportedModifierMask;
+}
+
+void ParseBooleanSetting(
+    const std::string& line,
+    const std::string_view name,
+    bool& destination)
+{
+    int value = destination ? 1 : 0;
+    const int original = value;
+    ParseIntegerSetting(line, name, value);
+    if (value != original || line.starts_with(std::string(name) + '=')) {
+        destination = value == 1;
+    }
 }
 
 bool IsValidVirtualKey(const int virtualKey)
@@ -56,11 +89,17 @@ Settings LoadSettings(const std::filesystem::path& path)
     std::string line;
     while (std::getline(input, line)) {
         ParseIntegerSetting(line, "future_stroke_limit", settings.futureStrokeLimit);
+        ParseFloatSetting(line, "drawing_scale", settings.drawingScale);
+        ParseFloatSetting(line, "control_panel_width", settings.controlPanelWidth);
         ParseIntegerSetting(line, "drawing_hotkey_vk", settings.drawingHotkeyVirtualKey);
         ParseModifierSetting(
             line, "drawing_hotkey_modifiers", settings.drawingHotkeyModifiers);
+        ParseBooleanSetting(
+            line, "vector_path_enabled", settings.vectorPathEnabled);
     }
     settings.futureStrokeLimit = std::clamp(settings.futureStrokeLimit, 20, 1000);
+    settings.drawingScale = std::clamp(settings.drawingScale, 0.3F, 3.0F);
+    settings.controlPanelWidth = std::clamp(settings.controlPanelWidth, 280.0F, 480.0F);
     if (!IsValidVirtualKey(settings.drawingHotkeyVirtualKey)) {
         settings.drawingHotkeyVirtualKey = 0x77;
         settings.drawingHotkeyModifiers = 0;
@@ -78,9 +117,17 @@ bool SaveSettings(const std::filesystem::path& path, const Settings& settings)
         }
         output << "[drawing]\n";
         output << "future_stroke_limit=" << std::clamp(settings.futureStrokeLimit, 20, 1000) << '\n';
+        output << std::fixed << std::setprecision(2)
+               << "drawing_scale=" << std::clamp(settings.drawingScale, 0.3F, 3.0F) << '\n';
         output << "drawing_hotkey_vk=" << settings.drawingHotkeyVirtualKey << '\n';
         output << "drawing_hotkey_modifiers="
                << (settings.drawingHotkeyModifiers & kSupportedModifierMask) << '\n';
+        output << "vector_path_enabled="
+               << (settings.vectorPathEnabled ? 1 : 0) << '\n';
+        output << "[ui]\n";
+        output << std::fixed << std::setprecision(2)
+               << "control_panel_width="
+               << std::clamp(settings.controlPanelWidth, 280.0F, 480.0F) << '\n';
     }
 
     std::error_code error;

@@ -25,4 +25,11 @@ struct RasterImage {
     std::uint32_t outputWidth,
     std::uint32_t outputHeight);
 
+[[nodiscard]] RasterImage RenderGrayscaleLineArt(const GrayImage& lineArt);
+
+[[nodiscard]] RasterImage RenderGrayscaleLineArt(
+    const GrayImage& lineArt,
+    std::uint32_t outputWidth,
+    std::uint32_t outputHeight);
+
 } // namespace vrcdraw

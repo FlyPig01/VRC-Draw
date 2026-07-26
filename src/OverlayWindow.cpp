@@ -166,8 +166,6 @@ void OverlayWindow::Update(const OverlayState& state)
     OverlayState normalized = state;
     normalized.progress = std::clamp(normalized.progress, 0.0F, 1.0F);
     const bool changed = state_.remaining != normalized.remaining ||
-                         state_.completedStrokes != normalized.completedStrokes ||
-                         state_.totalStrokes != normalized.totalStrokes ||
                          state_.progress != normalized.progress;
     if (!changed) {
         return;
@@ -268,9 +266,8 @@ void OverlayWindow::Paint()
     std::swprintf(
         progressText,
         std::size(progressText),
-        L"绘制进度：%zu / %zu 笔",
-        state_.completedStrokes,
-        state_.totalStrokes);
+        L"绘制进度：%.1f%%",
+        static_cast<double>(state_.progress * 100.0F));
     RECT progressLabel{Scale(16), Scale(12), client.right / 2 + Scale(44), Scale(42)};
     DrawTextW(
         buffer,

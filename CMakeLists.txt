@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(VRC_Draw VERSION 0.1.0 LANGUAGES CXX RC)
+project(VRC_Draw VERSION 0.2.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,8 +48,11 @@ add_library(vrcdraw_core STATIC
     src/ImageProcessor.cpp
     src/LineArtExporter.cpp
     src/LineArtRenderer.cpp
+    src/MouseInput.cpp
     src/PathMath.cpp
+    src/PathOptimizer.cpp
     src/Settings.cpp
+    src/VectorPath.cpp
 )
 
 target_include_directories(vrcdraw_core PUBLIC src)
@@ -74,6 +77,7 @@ target_compile_definitions(VRC-Draw PRIVATE
     NOMINMAX
     UNICODE
     _UNICODE
+    VRC_DRAW_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_libraries(VRC-Draw PRIVATE

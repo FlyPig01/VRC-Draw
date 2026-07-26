@@ -9,8 +9,6 @@ namespace vrcdraw {
 
 struct OverlayState {
     std::wstring remaining{L"--:--"};
-    std::size_t completedStrokes{};
-    std::size_t totalStrokes{};
     float progress{};
 };
 

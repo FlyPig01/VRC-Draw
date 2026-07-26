@@ -45,6 +45,10 @@ ID3D11ShaderResourceView* g_originalTexture = nullptr;
 ID3D11ShaderResourceView* g_lineArtTexture = nullptr;
 std::optional<std::filesystem::path> g_droppedFile;
 std::atomic<bool> g_drawingToggleRequested{false};
+std::atomic<HWND> g_drawingTargetWindow{nullptr};
+std::atomic<LONG> g_drawingTargetCursorX{0};
+std::atomic<LONG> g_drawingTargetCursorY{0};
+std::atomic<bool> g_drawingTargetCursorValid{false};
 std::atomic<bool> g_hotkeyCaptureActive{false};
 std::atomic<int> g_capturedHotkeyVirtualKey{0};
 std::atomic<std::uint32_t> g_capturedHotkeyModifiers{0};
@@ -170,21 +174,6 @@ bool RegisterConfiguredHotkey(
                static_cast<UINT>(virtualKey)) != FALSE;
 }
 
-std::chrono::milliseconds RemainingDuration(
-    const vrcdraw::ExecutionPlan& plan,
-    const std::size_t completedCommands)
-{
-    std::chrono::milliseconds remaining{};
-    for (std::size_t index = std::min(completedCommands, plan.commands.size());
-         index < plan.commands.size();
-         ++index) {
-        if (plan.commands[index].type == vrcdraw::MouseCommandType::Wait) {
-            remaining += plan.commands[index].duration;
-        }
-    }
-    return remaining;
-}
-
 std::string FormatDuration(const std::chrono::milliseconds duration)
 {
     const long long totalSeconds = std::max(0LL, (duration.count() + 999LL) / 1000LL);
@@ -262,17 +251,23 @@ void ApplyTheme()
 void LoadChineseFont()
 {
     ImGuiIO& io = ImGui::GetIO();
+    ImFontConfig fontConfig{};
+    fontConfig.GlyphOffset.y = -1.0F;
     wchar_t windowsDirectory[MAX_PATH]{};
     GetWindowsDirectoryW(windowsDirectory, static_cast<UINT>(std::size(windowsDirectory)));
     const auto fontPath = std::filesystem::path(windowsDirectory) / L"Fonts" / L"msyh.ttc";
     const std::string fontUtf8 = vrcdraw::PathToUtf8(fontPath);
     if (std::filesystem::exists(fontPath) &&
         io.Fonts->AddFontFromFileTTF(
-            fontUtf8.c_str(), 19.0F, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon()) !=
+            fontUtf8.c_str(),
+            21.0F,
+            &fontConfig,
+            io.Fonts->GetGlyphRangesChineseSimplifiedCommon()) !=
             nullptr) {
         return;
     }
-    io.Fonts->AddFontDefault();
+    fontConfig.SizePixels = 21.0F;
+    io.Fonts->AddFontDefault(&fontConfig);
 }
 
 bool CreateTexture(
@@ -331,9 +326,39 @@ const char* StateLabel(const vrcdraw::DrawingState state)
     case vrcdraw::DrawingState::Completed:
         return "绘制完成";
     case vrcdraw::DrawingState::Error:
-        return "输入发送失败";
+        return "绘制出错";
     }
     return "未知";
+}
+
+const char* InputModeLabel(const vrcdraw::MouseInputMode mode)
+{
+    switch (mode) {
+    case vrcdraw::MouseInputMode::Undetermined:
+        return "开始绘制时自动判断";
+    case vrcdraw::MouseInputMode::Relative:
+        return "已自动识别：中心锁定 / 相对移动";
+    case vrcdraw::MouseInputMode::DesktopAbsolute:
+        return "已自动识别：桌面光标 / 精确坐标";
+    }
+    return "开始绘制时自动判断";
+}
+
+const char* DrawingIssueMessage(const vrcdraw::DrawingIssue issue)
+{
+    switch (issue) {
+    case vrcdraw::DrawingIssue::None:
+        return "";
+    case vrcdraw::DrawingIssue::TargetChanged:
+        return "前台程序已改变，绘制已自动暂停；请返回原目标后再次按快捷键。";
+    case vrcdraw::DrawingIssue::DrawingOutsideDesktop:
+        return "绘制范围超出可见桌面，请降低绘制大小或把鼠标移到更合适的位置。";
+    case vrcdraw::DrawingIssue::InputDetectionFailed:
+        return "无法自动判断目标程序的鼠标行为，本次绘制未开始。";
+    case vrcdraw::DrawingIssue::InputSendFailed:
+        return "系统拒绝了鼠标输入，请确认目标程序没有以更高权限运行。";
+    }
+    return "绘制输入发生未知错误。";
 }
 
 enum class PreviewMode {
@@ -606,6 +631,9 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
     std::uint32_t lineArtPreviewHeight = 0;
     bool done = false;
     bool drawingEnabled = false;
+    bool drawingScalePlanDirty = false;
+    bool controlPanelWidthDirty = false;
+    vrcdraw::DrawingIssue previousDrawingIssue = vrcdraw::DrawingIssue::None;
     HotkeyCaptureTarget hotkeyCaptureTarget = HotkeyCaptureTarget::None;
 
     const auto unregisterConfiguredHotkeys = [&] {
@@ -656,8 +684,13 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
             g_lineArtTexture = nullptr;
         }
         currentImagePath = path;
-        processingTask.emplace(std::async(std::launch::async, [path] {
-            return vrcdraw::ProcessImage(path);
+        const bool vectorPathEnabled = settings.vectorPathEnabled;
+        processingTask.emplace(std::async(std::launch::async, [path, vectorPathEnabled] {
+            return vrcdraw::ProcessImage(
+                path,
+                vrcdraw::ImageProcessingOptions{
+                    .generateVectorPath = vectorPathEnabled,
+                });
         }));
     };
 
@@ -711,8 +744,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
             processingTask.reset();
             if (result) {
                 processedImage = std::make_unique<vrcdraw::ProcessedImage>(std::move(*result));
-                const auto lineArtPreview = vrcdraw::RenderBinaryLineArt(
-                    processedImage->lineArt.cleanLineArt);
+                const auto lineArtPreview = vrcdraw::RenderGrayscaleLineArt(
+                    processedImage->lineArt.coverageLineArt);
                 lineArtPreviewWidth = lineArtPreview.width;
                 lineArtPreviewHeight = lineArtPreview.height;
                 const bool originalTextureCreated = CreateTexture(
@@ -730,9 +763,21 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
                     processedImage.reset();
                     executionPlan.reset();
                 } else {
+                    const vrcdraw::ExecutionOptions executionOptions{
+                        .mouseScale = settings.drawingScale,
+                    };
                     executionPlan = std::make_unique<vrcdraw::ExecutionPlan>(
-                        vrcdraw::BuildExecutionPlan(processedImage->lineArt.strokes));
+                        settings.vectorPathEnabled &&
+                                processedImage->lineArt.vectorPath.has_value()
+                            ? vrcdraw::BuildExecutionPlan(
+                                  *processedImage->lineArt.vectorPath,
+                                  processedImage->lineArt.cleanLineArt,
+                                  executionOptions)
+                            : vrcdraw::BuildExecutionPlan(
+                                  processedImage->lineArt.strokes,
+                                  executionOptions));
                     drawingEngine.LoadPlan(*executionPlan);
+                    drawingScalePlanDirty = false;
                     previewMode = PreviewMode::LineArt;
                 }
             } else {
@@ -744,8 +789,17 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
         const bool canDraw = executionPlan != nullptr && !processingTask.has_value();
         if (g_drawingToggleRequested.exchange(false)) {
             if (canDraw) {
-                drawingEnabled = !drawingEnabled;
-                drawingEngine.SetRunRequested(drawingEnabled);
+                const bool requested = !drawingEngine.RunRequested();
+                vrcdraw::DrawingStartContext context{};
+                if (requested) {
+                    context.foregroundWindow = g_drawingTargetWindow.load();
+                    context.cursorPosition.x = g_drawingTargetCursorX.load();
+                    context.cursorPosition.y = g_drawingTargetCursorY.load();
+                    context.hasCursorPosition = g_drawingTargetCursorValid.load();
+                    errorMessage.clear();
+                }
+                drawingEngine.SetRunRequested(requested, context);
+                drawingEnabled = drawingEngine.RunRequested();
             } else {
                 drawingEnabled = false;
                 errorMessage = "请先导入图片并等待路径生成完成。";
@@ -758,19 +812,24 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
             drawingState == vrcdraw::DrawingState::Error) {
             drawingEnabled = false;
         }
+        drawingEnabled = drawingEngine.RunRequested();
+        const vrcdraw::DrawingIssue drawingIssue = drawingEngine.Issue();
+        if (drawingIssue != previousDrawingIssue ||
+            (drawingIssue != vrcdraw::DrawingIssue::None && errorMessage.empty())) {
+            previousDrawingIssue = drawingIssue;
+            if (drawingIssue != vrcdraw::DrawingIssue::None) {
+                errorMessage = DrawingIssueMessage(drawingIssue);
+            }
+        }
 
         vrcdraw::OverlayState overlayState{};
         if (executionPlan != nullptr) {
-            const std::size_t completedCommands = drawingEngine.CompletedCommands();
-            const std::size_t totalCommands = executionPlan->commands.size();
-            overlayState.completedStrokes = drawingEngine.CompletedStrokes();
-            overlayState.totalStrokes = drawingEngine.TotalStrokes();
-            overlayState.progress = totalCommands == 0
-                ? 0.0F
-                : static_cast<float>(completedCommands) /
-                      static_cast<float>(totalCommands);
+            const auto completedDuration = drawingEngine.CompletedPlannedDuration();
+            overlayState.progress =
+                vrcdraw::PlannedProgress(*executionPlan, completedDuration);
             const std::string remaining =
-                FormatDuration(RemainingDuration(*executionPlan, completedCommands));
+                FormatDuration(vrcdraw::RemainingPlannedDuration(
+                    *executionPlan, completedDuration));
             overlayState.remaining.assign(remaining.begin(), remaining.end());
         }
         overlayWindow.Update(overlayState);
@@ -795,7 +854,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
 
         ImGui::TextUnformatted("VRC-Draw");
         ImGui::SameLine();
-        ImGui::TextDisabled("MVP 0.1");
+        ImGui::TextDisabled("v%s", VRC_DRAW_VERSION);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 150.0F);
         if (drawingEnabled) {
             ImGui::TextColored(ImVec4(0.086F, 0.639F, 0.290F, 1.0F), "绘制已开启");
@@ -805,12 +864,23 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
         ImGui::Separator();
 
         const ImVec2 workspaceSize = ImGui::GetContentRegionAvail();
-        const float controlPanelWidth = std::clamp(workspaceSize.x * 0.23F, 220.0F, 280.0F);
+        constexpr float kControlPanelMinimumWidth = 280.0F;
+        constexpr float kControlPanelMaximumWidth = 480.0F;
+        constexpr float kPreviewPanelMinimumWidth = 420.0F;
+        constexpr float kSplitterWidth = 8.0F;
+        const float workspaceControlPanelMaximum = std::max(
+            kControlPanelMinimumWidth,
+            workspaceSize.x - kPreviewPanelMinimumWidth - kSplitterWidth);
+        const float controlPanelWidth = std::clamp(
+            settings.controlPanelWidth,
+            kControlPanelMinimumWidth,
+            std::min(kControlPanelMaximumWidth, workspaceControlPanelMaximum));
 
         ImGui::BeginChild(
             "ControlPanel",
             ImVec2(controlPanelWidth, workspaceSize.y),
             ImGuiChildFlags_Borders);
+        ImGui::PushTextWrapPos(0.0F);
         ImGui::TextUnformatted("文件");
         if (ImGui::Button("打开图片", ImVec2(-1.0F, 0))) {
             if (const auto path = ShowOpenImageDialog(window)) {
@@ -843,6 +913,61 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
         ImGui::Separator();
         ImGui::TextUnformatted("绘制控制");
         ImGui::TextWrapped("使用开始/暂停快捷键控制绘制；绘制期间会自动显示进度悬浮窗。");
+
+        ImGui::Spacing();
+        ImGui::TextUnformatted("绘制大小");
+        ImGui::SetNextItemWidth(-1.0F);
+        const bool scaleLocked = drawingEnabled ||
+            drawingState == vrcdraw::DrawingState::Paused ||
+            processingTask.has_value();
+        ImGui::BeginDisabled(scaleLocked);
+        if (ImGui::SliderFloat(
+                "##drawingScale",
+                &settings.drawingScale,
+                0.3F,
+                3.0F,
+                "%.2f x")) {
+            settings.drawingScale = std::clamp(settings.drawingScale, 0.3F, 3.0F);
+            drawingScalePlanDirty = true;
+        }
+        const bool scaleEditFinished = ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::EndDisabled();
+        if (executionPlan != nullptr && executionPlan->hasDrawingPosition) {
+            const int drawingWidth = executionPlan->maximumDrawingPosition.x -
+                executionPlan->minimumDrawingPosition.x;
+            const int drawingHeight = executionPlan->maximumDrawingPosition.y -
+                executionPlan->minimumDrawingPosition.y;
+            ImGui::TextDisabled("当前预计范围：%d x %d", drawingWidth, drawingHeight);
+        } else {
+            ImGui::TextDisabled("导入图片后显示预计绘制范围");
+        }
+        if (drawingScalePlanDirty && scaleEditFinished) {
+            if (processedImage != nullptr) {
+                const vrcdraw::ExecutionOptions executionOptions{
+                    .mouseScale = settings.drawingScale,
+                };
+                executionPlan = std::make_unique<vrcdraw::ExecutionPlan>(
+                    settings.vectorPathEnabled &&
+                            processedImage->lineArt.vectorPath.has_value()
+                        ? vrcdraw::BuildExecutionPlan(
+                              *processedImage->lineArt.vectorPath,
+                              processedImage->lineArt.cleanLineArt,
+                              executionOptions)
+                        : vrcdraw::BuildExecutionPlan(
+                              processedImage->lineArt.strokes,
+                              executionOptions));
+                drawingEngine.LoadPlan(*executionPlan);
+            }
+            drawingScalePlanDirty = false;
+            if (!vrcdraw::SaveSettings(portablePaths->settings, settings)) {
+                errorMessage = "绘制大小已生效，但无法写入软件目录中的设置文件。";
+            } else {
+                successMessage = "绘制大小已更新。";
+            }
+        }
+        if (scaleLocked) {
+            ImGui::TextDisabled("暂停状态也不能修改；完成或重新导入后可以调整。");
+        }
 
         ImGui::Spacing();
         ImGui::TextUnformatted("笔画上限（预留功能）");
@@ -893,26 +1018,75 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
                 ImVec4(0.086F, 0.639F, 0.290F, 1.0F), "%s", successMessage.c_str());
         }
         ImGui::Separator();
-        ImGui::TextDisabled("开发模式：不检查当前前台程序");
+        ImGui::TextWrapped("输入方式：%s", InputModeLabel(drawingEngine.InputMode()));
+        ImGui::TextDisabled("不限制目标程序；开始时自动判断鼠标是否被锁定在中心。");
+        ImGui::PopTextWrapPos();
         ImGui::EndChild();
 
-        ImGui::SameLine();
+        ImGui::SameLine(0.0F, 0.0F);
+        ImGui::InvisibleButton(
+            "##ControlPanelSplitter", ImVec2(kSplitterWidth, workspaceSize.y));
+        const bool splitterHovered = ImGui::IsItemHovered();
+        const bool splitterActive = ImGui::IsItemActive();
+        const bool splitterReleased = ImGui::IsItemDeactivated();
+        if (splitterHovered || splitterActive) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        }
+        if (splitterActive && ImGui::GetIO().MouseDelta.x != 0.0F) {
+            settings.controlPanelWidth = std::clamp(
+                controlPanelWidth + ImGui::GetIO().MouseDelta.x,
+                kControlPanelMinimumWidth,
+                std::min(kControlPanelMaximumWidth, workspaceControlPanelMaximum));
+            controlPanelWidthDirty = true;
+        }
+        const ImVec2 splitterMinimum = ImGui::GetItemRectMin();
+        const ImVec2 splitterMaximum = ImGui::GetItemRectMax();
+        const ImU32 splitterColor = ImGui::GetColorU32(
+            splitterActive
+                ? ImGuiCol_SliderGrabActive
+                : (splitterHovered ? ImGuiCol_SliderGrab : ImGuiCol_Separator));
+        const float splitterCenter = (splitterMinimum.x + splitterMaximum.x) * 0.5F;
+        ImGui::GetWindowDrawList()->AddLine(
+            ImVec2(splitterCenter, splitterMinimum.y),
+            ImVec2(splitterCenter, splitterMaximum.y),
+            splitterColor,
+            splitterActive || splitterHovered ? 2.0F : 1.0F);
+        if (splitterReleased && controlPanelWidthDirty) {
+            controlPanelWidthDirty = false;
+            if (!vrcdraw::SaveSettings(portablePaths->settings, settings)) {
+                errorMessage = "左侧控制栏宽度已调整，但无法写入软件目录中的设置文件。";
+            }
+        }
+
+        ImGui::SameLine(0.0F, 0.0F);
         ImGui::BeginChild(
             "PreviewPanel", ImVec2(0.0F, workspaceSize.y), ImGuiChildFlags_None);
 
+        const auto previewTabWidth = [](const char* label) {
+            return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        };
         ImGui::BeginDisabled(processedImage == nullptr);
         if (ImGui::Selectable(
-                "原图", previewMode == PreviewMode::Original, 0, ImVec2(76, 0))) {
+                "原图",
+                previewMode == PreviewMode::Original,
+                0,
+                ImVec2(previewTabWidth("原图"), 0))) {
             previewMode = PreviewMode::Original;
         }
         ImGui::SameLine();
         if (ImGui::Selectable(
-                "线稿", previewMode == PreviewMode::LineArt, 0, ImVec2(76, 0))) {
+                "线稿",
+                previewMode == PreviewMode::LineArt,
+                0,
+                ImVec2(previewTabWidth("线稿"), 0))) {
             previewMode = PreviewMode::LineArt;
         }
         ImGui::SameLine();
         if (ImGui::Selectable(
-                "绘画路线", previewMode == PreviewMode::Route, 0, ImVec2(106, 0))) {
+                "绘画路线",
+                previewMode == PreviewMode::Route,
+                0,
+                ImVec2(previewTabWidth("绘画路线"), 0))) {
             previewMode = PreviewMode::Route;
         }
         ImGui::EndDisabled();
@@ -924,28 +1098,20 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int)
 
         ImGui::BeginChild("DrawingInformation", ImVec2(0.0F, 88.0F), ImGuiChildFlags_Borders);
         if (executionPlan != nullptr) {
-            const std::size_t completedCommands = drawingEngine.CompletedCommands();
-            const std::size_t totalCommands = executionPlan->commands.size();
-            const float progress = totalCommands == 0
-                ? 0.0F
-                : std::clamp(
-                      static_cast<float>(completedCommands) /
-                          static_cast<float>(totalCommands),
-                      0.0F,
-                      1.0F);
+            const auto completedDuration = drawingEngine.CompletedPlannedDuration();
+            const float progress =
+                vrcdraw::PlannedProgress(*executionPlan, completedDuration);
             const std::string remaining =
-                FormatDuration(RemainingDuration(*executionPlan, completedCommands));
+                FormatDuration(vrcdraw::RemainingPlannedDuration(
+                    *executionPlan, completedDuration));
             ImGui::Text("状态：%s", StateLabel(drawingEngine.State()));
-            ImGui::SameLine();
-            ImGui::TextDisabled("总笔画：%zu", drawingEngine.TotalStrokes());
             ImGui::SameLine();
             ImGui::TextDisabled("预计剩余：%s", remaining.c_str());
             char progressLabel[96]{};
             sprintf_s(
                 progressLabel,
-                "绘制进度：%zu / %zu 笔",
-                drawingEngine.CompletedStrokes(),
-                drawingEngine.TotalStrokes());
+                "绘制进度：%.1f%%",
+                static_cast<double>(progress * 100.0F));
             ImGui::ProgressBar(progress, ImVec2(-1.0F, 0.0F), progressLabel);
         } else if (processingTask.has_value()) {
             ImGui::TextUnformatted("正在处理图片……");
@@ -1153,6 +1319,12 @@ LRESULT WINAPI WindowProcedure(
     }
     case WM_HOTKEY:
         if (wParam == kDrawingToggleHotkeyId) {
+            g_drawingTargetWindow.store(GetForegroundWindow());
+            POINT cursor{};
+            const bool hasCursor = GetCursorPos(&cursor) != FALSE;
+            g_drawingTargetCursorX.store(cursor.x);
+            g_drawingTargetCursorY.store(cursor.y);
+            g_drawingTargetCursorValid.store(hasCursor);
             g_drawingToggleRequested.store(true);
         }
         return 0;
