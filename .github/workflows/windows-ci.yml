@@ -73,7 +73,7 @@ jobs:
           "PACKAGE_ARTIFACT=VRC-Draw-v$version-win64" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload portable package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PACKAGE_ARTIFACT }}
           path: |
